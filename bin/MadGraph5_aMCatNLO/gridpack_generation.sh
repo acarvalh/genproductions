@@ -123,11 +123,15 @@ make_gridpack () {
     # CMS Connect runs git status inside its own script.
     if [ $iscmsconnect -eq 0 ]; then
       cd $PRODHOME
-      if [ -x "$(command -v git)" ]; then
-        git status
+      # LOCAL-CONDOR PATCH: skip the informational git block when PRODHOME is not a
+      # git repo (workers get a code tarball without .git). set -e would abort here.
+      if [ -x "$(command -v git)" ] && git rev-parse --git-dir >/dev/null 2>&1; then
+        git status || true
         echo "Current git revision is:"
-        git rev-parse HEAD
-        git diff | cat
+        git rev-parse HEAD || true
+        git diff | cat || true
+      else
+        echo "(no git repo at PRODHOME; skipping revision print)"
       fi
       cd -
     fi
@@ -275,7 +279,24 @@ make_gridpack () {
           #get needed BSM model
           if [[ $model = *[!\ ]* ]]; then
             echo "Loading extra model $model"
-            wget --no-check-certificate https://cms-project-generators.web.cern.ch/cms-project-generators/$model	
+            # LOCAL-TEST PATCH: heft_loop_sm_restricted5 not yet on cms-project-generators;
+            # fetch it from the CERNBox public share instead. Remove this branch once the
+            # model is uploaded centrally (then the card's bare filename resolves normally).
+            if [ "$model" = "heft_loop_sm_restricted5.tar.gz" ]; then
+              # The SAME FILENAME exists on cms-project-generators with DIFFERENT content:
+              # the central copy predates the ggHHH R2 vertex. Fetching the wrong one
+              # produces a gridpack that looks fine and silently has no R2, so verify the
+              # content and abort rather than build something unusable.
+              wget --no-check-certificate -O "$model" "https://cernbox.cern.ch/s/br2q9VndtwSWVpa/download"
+              if ! tar -xzOf "$model" heft_loop_sm_restricted5/CT_vertices.py 2>/dev/null | grep -q 'V_GGHHH'; then
+                echo "FATAL: $model has no ggHHH R2 vertex (V_GGHHH missing from CT_vertices.py)."
+                echo "       Expected the model from gitlab.com/apapaefs/multihiggs_loop_sm (>= 2026-10-18)."
+                exit 1
+              fi
+              echo "Model check: V_GGHHH present (ggHHH R2 vertex)."
+            else
+              wget --no-check-certificate https://cms-project-generators.web.cern.ch/cms-project-generators/$model
+            fi
             cd models
             if [[ $model == *".zip"* ]]; then
               unzip ../$model
